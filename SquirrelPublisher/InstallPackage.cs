@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using System.ComponentModel.Design;
 using System.Globalization;
 using System.Threading;
@@ -6,6 +7,7 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Task = System.Threading.Tasks.Task;
+using EnvDTE;
 
 namespace SquirrelPublisher
 {
@@ -14,6 +16,8 @@ namespace SquirrelPublisher
     /// </summary>
     internal sealed class InstallPackage
     {
+        private EnvDTE.DTE _dteService;
+
         /// <summary>
         /// Command ID.
         /// </summary>
@@ -35,9 +39,10 @@ namespace SquirrelPublisher
         /// </summary>
         /// <param name="package">Owner package, not null.</param>
         /// <param name="commandService">Command service to add command to, not null.</param>
-        private InstallPackage(AsyncPackage package, OleMenuCommandService commandService)
+        private InstallPackage(AsyncPackage package, OleMenuCommandService commandService, EnvDTE.DTE dteService)
         {
             this.package = package ?? throw new ArgumentNullException(nameof(package));
+            this._dteService = dteService ?? throw new ArgumentNullException(nameof(dteService));
             commandService = commandService ?? throw new ArgumentNullException(nameof(commandService));
 
             var menuCommandID = new CommandID(CommandSet, CommandId);
@@ -76,7 +81,8 @@ namespace SquirrelPublisher
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
 
             OleMenuCommandService commandService = await package.GetServiceAsync(typeof(IMenuCommandService)) as OleMenuCommandService;
-            Instance = new InstallPackage(package, commandService);
+            EnvDTE.DTE dteService = await package.GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
+            Instance = new InstallPackage(package, commandService, dteService);
         }
 
         /// <summary>
@@ -88,15 +94,56 @@ namespace SquirrelPublisher
         /// <param name="e">Event args.</param>
         private void Execute(object sender, EventArgs e)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            string message = string.Format(CultureInfo.CurrentCulture, "Inside {0}.MenuItemCallback()", this.GetType().FullName);
-            string title = "InstallPackage";
+            try
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
 
-            // Show a message box to prove we were here
+                string configuration = "Release";
+                string platformTarget = "Any CPU";
+
+                // ToDo: get PublishProject name from Settings
+                var projToPublish = (string)((object[])_dteService.Solution.SolutionBuild.StartupProjects)[0];
+
+                var project = _dteService.Solution.Projects.OfType<Project>().FirstOrDefault(x => x.UniqueName == projToPublish);
+                var projShortName = System.IO.Path.GetFileNameWithoutExtension(projToPublish);
+                var outputPath = projToPublish;
+
+                Logger.Log($"------ Build started: Project: {projShortName}, Configuration: {configuration} {platformTarget} ------", true);
+
+                _dteService.Solution.SolutionBuild.BuildProject(configuration, projToPublish, true);
+
+                if (_dteService.Solution.SolutionBuild.BuildState != vsBuildState.vsBuildStateDone ||
+                    _dteService.Solution.SolutionBuild.LastBuildInfo != 0)
+                {
+                    Logger.Log($"========== Build: 0 succeeded, 1 failed, 0 up-to-date, 0 skipped ==========", true);
+                    Logger.Log($"========== Publish: 0 succeeded, 0 failed, 1 skipped ==========", true);
+                    throw new Exception("Build failed. Check the output window for more details.");
+                }
+
+                Logger.Log($"========== Build: 1 succeeded, 0 failed, 0 up-to-date, 0 skipped ==========", true);
+                Logger.Log($"------ Publish started: Project: {projShortName}, Configuration: {configuration} {platformTarget} ------", true);
+
+                // object result = await Publisher.PublishProject(outputPath);
+
+                Logger.Log($"========== Publish: 0 succeeded, 0 failed, 1 skipped ==========", true);
+            }
+            catch (Exception ex)
+            {
+                VsShellUtilities.ShowMessageBox(
+                    this.package,
+                    $"Publish has encountered an error.{System.Environment.NewLine}" +
+                    $"Publishing failed.{System.Environment.NewLine}{System.Environment.NewLine}" +
+                    ex.Message,
+                    "Publish failed",
+                    OLEMSGICON.OLEMSGICON_CRITICAL,
+                    OLEMSGBUTTON.OLEMSGBUTTON_OK,
+                    OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+            }
+
             VsShellUtilities.ShowMessageBox(
                 this.package,
-                message,
-                title,
+                "Publishing is complete",
+                "Publish succeeded",
                 OLEMSGICON.OLEMSGICON_INFO,
                 OLEMSGBUTTON.OLEMSGBUTTON_OK,
                 OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
