@@ -8,6 +8,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Task = System.Threading.Tasks.Task;
 using EnvDTE;
+using System.Collections.Generic;
 
 namespace SquirrelPublisher
 {
@@ -96,21 +97,24 @@ namespace SquirrelPublisher
         {
             try
             {
+                Statusbar.AnimateStatusBarAsync(true);
+                Statusbar.UpdateStatusAsync($"Building...");
+
                 ThreadHelper.ThrowIfNotOnUIThread();
 
-                string configuration = "Release";
-                string platformTarget = "Any CPU";
-
-                // ToDo: get PublishProject name from Settings
-                var projToPublish = (string)((object[])_dteService.Solution.SolutionBuild.StartupProjects)[0];
+                var configurationName = Settings.ConfigurationName;
+                var platformTarget = Settings.PlatformTarget;
+                var projToPublish = Settings.ProjectUniqueName; // (string)((object[])_dteService.Solution.SolutionBuild.StartupProjects)[0];
+                var projShortName = System.IO.Path.GetFileNameWithoutExtension(projToPublish);
 
                 var project = _dteService.Solution.Projects.OfType<Project>().FirstOrDefault(x => x.UniqueName == projToPublish);
-                var projShortName = System.IO.Path.GetFileNameWithoutExtension(projToPublish);
-                var outputPath = projToPublish;
+                var configuration = project.ConfigurationManager.OfType<Configuration>().First(x => x.ConfigurationName == configurationName);
+                var projectPath = System.IO.Path.GetDirectoryName(project.FullName);
+                var outputPath = System.IO.Path.Combine(projectPath, configuration.Properties.Item("OutputPath").Value.ToString());
 
-                Logger.Log($"------ Build started: Project: {projShortName}, Configuration: {configuration} {platformTarget} ------", true);
+                Logger.Log($"------ Build started: Project: {projShortName}, Configuration: {configurationName} {platformTarget} ------", true);
 
-                _dteService.Solution.SolutionBuild.BuildProject(configuration, projToPublish, true);
+                _dteService.Solution.SolutionBuild.BuildProject(configurationName, projToPublish, true);
 
                 if (_dteService.Solution.SolutionBuild.BuildState != vsBuildState.vsBuildStateDone ||
                     _dteService.Solution.SolutionBuild.LastBuildInfo != 0)
@@ -121,9 +125,10 @@ namespace SquirrelPublisher
                 }
 
                 Logger.Log($"========== Build: 1 succeeded, 0 failed, 0 up-to-date, 0 skipped ==========", true);
-                Logger.Log($"------ Publish started: Project: {projShortName}, Configuration: {configuration} {platformTarget} ------", true);
+                Logger.Log($"------ Publish started: Project: {projShortName}, Configuration: {configurationName} {platformTarget} ------", true);
 
-                // object result = await Publisher.PublishProject(outputPath);
+                Statusbar.UpdateStatusAsync($"Publishing...");
+                Publisher.PublishProject(outputPath);
 
                 Logger.Log($"========== Publish: 0 succeeded, 0 failed, 1 skipped ==========", true);
             }
@@ -138,6 +143,12 @@ namespace SquirrelPublisher
                     OLEMSGICON.OLEMSGICON_CRITICAL,
                     OLEMSGBUTTON.OLEMSGBUTTON_OK,
                     OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+                return;
+            }
+            finally
+            {
+                Statusbar.AnimateStatusBarAsync(false);
+                Statusbar.HideStatusAsync(3000);
             }
 
             VsShellUtilities.ShowMessageBox(
